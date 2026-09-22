@@ -7,8 +7,10 @@ import 'presentation/screens/asset_list_screen.dart';
 import 'presentation/screens/qr_scanner_screen.dart';
 import 'presentation/screens/work_orders_screen.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // AST-SEC-REQ-41: Initialize session from flutter_secure_storage
+  await ApiClient().initSecureSession();
   runApp(const SmartAssetApp());
 }
 

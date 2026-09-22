@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../config/app_config.dart';
 import '../../data/models/user_model.dart';
 import '../../data/models/asset_model.dart';
@@ -23,12 +24,29 @@ class ApiClient {
   factory ApiClient() => _instance;
   ApiClient._internal();
 
+  static const _tokenKey = 'ast_jwt_token';
+  static const _userKey = 'ast_user_profile';
+  final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
+
   String? _accessToken;
   UserModel? currentUser;
 
   String? get accessToken => _accessToken;
   bool get isAuthenticated => _accessToken != null;
   bool get isLoggedIn => isAuthenticated;
+
+  /// AST-SEC-REQ-41: Initialize session from encrypted secure storage on app launch
+  Future<void> initSecureSession() async {
+    try {
+      _accessToken = await _secureStorage.read(key: _tokenKey);
+      final userJson = await _secureStorage.read(key: _userKey);
+      if (userJson != null) {
+        currentUser = UserModel.fromJson(jsonDecode(userJson) as Map<String, dynamic>);
+      }
+    } catch (_) {
+      // Graceful fallback for non-hardware environments
+    }
+  }
 
   Map<String, String> _headers() {
     final headers = <String, String>{
@@ -62,7 +80,7 @@ class ApiClient {
     }
   }
 
-  // 1. Authentication (AST-FR-01)
+  // 1. Authentication (AST-FR-01 & AST-SEC-REQ-41)
   Future<UserModel> login(String email, String password) async {
     final url = Uri.parse('${AppConfig.apiBaseUrl}/auth/login');
     final response = await http.post(
@@ -74,12 +92,23 @@ class ApiClient {
     final data = _processResponse(response);
     _accessToken = data['accessToken'] as String;
     currentUser = UserModel.fromJson(data['user'] as Map<String, dynamic>);
+
+    // AST-SEC-REQ-41: Securely persist token using hardware-backed keystore/keychain
+    try {
+      await _secureStorage.write(key: _tokenKey, value: _accessToken);
+      await _secureStorage.write(key: _userKey, value: jsonEncode(data['user']));
+    } catch (_) {}
+
     return currentUser!;
   }
 
-  void logout() {
+  Future<void> logout() async {
     _accessToken = null;
     currentUser = null;
+    try {
+      await _secureStorage.delete(key: _tokenKey);
+      await _secureStorage.delete(key: _userKey);
+    } catch (_) {}
   }
 
   // 2. Dashboard KPIs (AST-FR-02)
