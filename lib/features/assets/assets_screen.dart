@@ -643,20 +643,30 @@ class _AssetCardWidget extends StatelessWidget {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Row(
-                            children: [
-                              SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: Checkbox(value: false, onChanged: (v) {}, side: BorderSide(color: Colors.grey.shade400)),
-                              ),
-                              const SizedBox(width: 8),
-                              Text(asset.id, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AssetsTheme.textMain)),
-                              const SizedBox(width: 8),
-                              Text(asset.serialNumber, style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
-                            ],
+                          Expanded(
+                            child: Row(
+                              children: [
+                                SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: Checkbox(value: false, onChanged: (v) {}, side: BorderSide(color: Colors.grey.shade400)),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(asset.id, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AssetsTheme.textMain)),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    asset.serialNumber,
+                                    style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
+                          const SizedBox(width: 8),
                           Row(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
                               _buildStatusChip(),
                               const SizedBox(width: 4),
