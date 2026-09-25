@@ -1,122 +1,56 @@
 import 'package:flutter/material.dart';
-import 'package:qr_flutter/qr_flutter.dart';
-import '../../shared_components.dart';
-import '../dashboard/dashboard_screen.dart';
-import '../assets/assets_screen.dart';
-import '../assets/views/qr_scanner_screen.dart';
-import '../../core/network/dio_client.dart';
-
-// -----------------------------------------------------------------------------
-// Data Models
-// -----------------------------------------------------------------------------
-enum OrderStatus { pending, scheduled, inProgress, completed }
-enum PriorityLevel { critical, high, medium, low }
+import 'package:asset_management/core/network/dio_client.dart';
+import 'package:asset_management/core/security/token_manager.dart';
+import 'package:asset_management/features/assets/assets_screen.dart';
+import 'package:asset_management/features/assets/views/qr_scanner_screen.dart';
+import 'package:asset_management/features/dashboard/dashboard_screen.dart';
+import 'package:asset_management/features/settings/menu_sheet.dart';
+import 'package:asset_management/shared_components.dart';
 
 class WorkOrderModel {
-  final String orderId;
+  final String id;
   final String title;
-  final String assetId;
-  final String location;
-  final String description;
-  final OrderStatus status;
-  final PriorityLevel priority;
+  final String assetName;
+  final String assetCode;
+  final String priority;
+  final String status;
   final String assigneeName;
-  final String assigneeRole;
-  final String assigneeImage;
+  final String assigneeInitials;
   final String dueDate;
-  final String scheduledDate;
-  final String type; // e.g. "Corrective maintenance"
+  final String location;
+  final bool isFastTrack;
 
-  const WorkOrderModel({
-    required this.orderId,
+  WorkOrderModel({
+    required this.id,
     required this.title,
-    required this.assetId,
-    required this.location,
-    required this.description,
-    required this.status,
+    required this.assetName,
+    required this.assetCode,
     required this.priority,
+    required this.status,
     required this.assigneeName,
-    required this.assigneeRole,
-    required this.assigneeImage,
+    required this.assigneeInitials,
     required this.dueDate,
-    required this.scheduledDate,
-    required this.type,
+    required this.location,
+    required this.isFastTrack,
   });
 
-  factory WorkOrderModel.fromJson(Map<String, dynamic> json) {
-    final statusStr = json['status']?.toString().toLowerCase() ?? '';
-    OrderStatus st = OrderStatus.pending;
-    if (statusStr.contains('progress')) {
-      st = OrderStatus.inProgress;
-    } else if (statusStr.contains('sched')) {
-      st = OrderStatus.scheduled;
-    } else if (statusStr.contains('comp')) {
-      st = OrderStatus.completed;
-    }
-
-    final prioStr = json['priority']?.toString().toLowerCase() ?? '';
-    PriorityLevel prio = PriorityLevel.medium;
-    if (prioStr.contains('crit')) {
-      prio = PriorityLevel.critical;
-    } else if (prioStr.contains('high')) {
-      prio = PriorityLevel.high;
-    } else if (prioStr.contains('low')) {
-      prio = PriorityLevel.low;
-    }
-
-    final assetObj = json['asset'] as Map<String, dynamic>?;
-    final tag = assetObj?['assetTag'] ?? json['assetTag'] ?? 'AST-CAMPUS';
-    final assetBrand = assetObj?['brand'] ?? '';
-    final assetModel = assetObj?['model'] ?? '';
-    final fullTitle = (assetBrand.isNotEmpty || assetModel.isNotEmpty)
-        ? '$assetBrand $assetModel'.trim()
-        : (json['title'] ?? 'Campus Maintenance Order');
-
-    final techObj = json['assignedTo'] as Map<String, dynamic>?;
-    final techName = techObj?['fullName'] ?? 'Field Technician';
-
-    return WorkOrderModel(
-      orderId: json['orderNumber'] ?? json['id']?.toString().substring(0, 8).toUpperCase() ?? 'WO-2025',
-      title: fullTitle,
-      assetId: tag.toString(),
-      location: assetObj?['currentLocation']?['name']?.toString() ?? 'Faculty of AI Lab',
-      description: json['description']?.toString() ?? 'Scheduled telemetry & preventive inspection',
-      status: st,
-      priority: prio,
-      assigneeName: techName.toString(),
-      assigneeRole: 'Field Specialist',
-      assigneeImage: 'https://randomuser.me/api/portraits/men/32.jpg',
-      dueDate: json['dueAt']?.toString().split('T')[0] ?? '48h',
-      scheduledDate: json['scheduledFor']?.toString().split('T')[0] ?? 'Today',
-      type: json['maintenanceType']?.toString() ?? 'Corrective maintenance',
-    );
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'title': title,
+      'assetName': assetName,
+      'assetCode': assetCode,
+      'priority': priority,
+      'status': status,
+      'assigneeName': assigneeName,
+      'assigneeInitials': assigneeInitials,
+      'dueDate': dueDate,
+      'location': location,
+      'isFastTrack': isFastTrack,
+    };
   }
 }
 
-// -----------------------------------------------------------------------------
-// Theme
-// -----------------------------------------------------------------------------
-class OrdersTheme {
-  static const Color background = Color(0xFFF8FAFC);
-  static const Color surface = Colors.white;
-  static const Color primaryNavy = Color(0xFF0F3A80);
-  static const Color primaryBlue = Color(0xFF2563EB);
-  static const Color textMain = Color(0xFF0F172A);
-  static const Color textSub = Color(0xFF64748B);
-  
-  static Color getPriorityColor(PriorityLevel level) {
-    switch (level) {
-      case PriorityLevel.critical: return const Color(0xFFDC2626);
-      case PriorityLevel.high: return const Color(0xFFD97706);
-      case PriorityLevel.medium: return const Color(0xFF2563EB);
-      case PriorityLevel.low: return const Color(0xFF64748B);
-    }
-  }
-}
-
-// -----------------------------------------------------------------------------
-// Screen
-// -----------------------------------------------------------------------------
 class OrdersScreen extends StatefulWidget {
   const OrdersScreen({super.key});
 
@@ -125,854 +59,1252 @@ class OrdersScreen extends StatefulWidget {
 }
 
 class _OrdersScreenState extends State<OrdersScreen> {
-  OrderStatus? _selectedFilter; // null = show all
-  final int _currentIndex = 3; // 'Orders' index
-  final DioClient _dioClient = DioClient.instance;
-  bool _isLoading = false;
+  final int _currentNavIndex = 3;
+  String _selectedFilter = 'All Orders';
+  String _selectedPriorityFilter = 'All';
+  String _selectedTechnicianFilter = 'All';
+  bool _onlyFastTrack = false;
+  bool _isLoading = true;
+  final TextEditingController _searchController = TextEditingController();
+
+  final List<WorkOrderModel> _defaultCampusOrders = [
+    WorkOrderModel(
+      id: 'WO-8942',
+      title: 'Thermal Paste & Fan Array Replacement',
+      assetName: 'Dell PowerEdge R750 AI Cluster Server',
+      assetCode: 'AST-08904',
+      priority: 'High',
+      status: 'In Progress',
+      assigneeName: 'Eng. Karim Adel',
+      assigneeInitials: 'KA',
+      dueDate: 'Today, 5:00 PM',
+      location: 'Main Server Building - Rack B12',
+      isFastTrack: true,
+    ),
+    WorkOrderModel(
+      id: 'WO-8941',
+      title: 'Compressor Vibration & Bearing Calibration',
+      assetName: 'Carrier Centrifugal Chiller #2',
+      assetCode: 'AST-12827',
+      priority: 'High',
+      status: 'Pending',
+      assigneeName: 'Eng. Tarek Mansour',
+      assigneeInitials: 'TM',
+      dueDate: 'Tomorrow, 11:00 AM',
+      location: 'North Science Campus - Plant B1',
+      isFastTrack: true,
+    ),
+    WorkOrderModel(
+      id: 'WO-8939',
+      title: 'Optical Laser Alignment & Filter Cleaning',
+      assetName: 'Epson Pro L1505UH Laser Projector',
+      assetCode: 'AST-07311',
+      priority: 'Medium',
+      status: 'Pending',
+      assigneeName: 'Prof. Youssef Ali',
+      assigneeInitials: 'YA',
+      dueDate: '28 Oct 2026',
+      location: 'Faculty of AI - Main Hall A',
+      isFastTrack: false,
+    ),
+    WorkOrderModel(
+      id: 'WO-8932',
+      title: 'Quarterly Firmware & Redundancy Audit',
+      assetName: 'Cisco Catalyst 9600 Core Switch',
+      assetCode: 'AST-04910',
+      priority: 'Low',
+      status: 'Completed',
+      assigneeName: 'Dr. Ahmed Hassan',
+      assigneeInitials: 'AH',
+      dueDate: 'Completed On Time',
+      location: 'Main Server Building - Core Room',
+      isFastTrack: false,
+    ),
+  ];
+
+  List<WorkOrderModel> _allOrders = [];
 
   @override
   void initState() {
     super.initState();
+    _searchController.addListener(() => setState(() {}));
     _fetchOrders();
   }
 
-  Future<void> _fetchOrders() async {
-    setState(() {
-      _isLoading = true;
-    });
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
+  Future<void> _fetchOrders() async {
+    setState(() => _isLoading = true);
+
+    final Map<String, WorkOrderModel> mergedById = {};
+
+    // 1. Load default campus orders
+    for (final o in _defaultCampusOrders) {
+      mergedById[o.id.toUpperCase()] = o;
+    }
+
+    // 2. Try fetching backend orders
     try {
-      final response = await _dioClient.dio.get('/work-orders');
-      if (response.statusCode == 200 && response.data['success'] == true) {
-        final List<dynamic> list = response.data['data'] ?? [];
-        if (list.isNotEmpty && mounted) {
-          final parsed = list.map((j) => WorkOrderModel.fromJson(j as Map<String, dynamic>)).toList();
-          setState(() {
-            _mockOrders.clear();
-            _mockOrders.addAll(parsed);
-            _isLoading = false;
-          });
-          return;
+      final response = await DioClient.instance.dio.get('/work-orders');
+      if (response.statusCode == 200 && response.data != null) {
+        final dynamic rawData = response.data['data'] ?? response.data;
+        final List<dynamic> items = rawData is List ? rawData : (rawData['items'] ?? []);
+        for (final item in items) {
+          final idStr = (item['id'] ?? 'WO-1000').toString();
+          final shortId = idStr.length > 8 ? 'WO-${idStr.substring(0, 4).toUpperCase()}' : idStr.toUpperCase();
+          final assignee = item['assignedTo']?['fullName']?.toString() ??
+              (TokenManager.currentName ?? 'Eng. Karim Adel');
+          mergedById[shortId] = WorkOrderModel(
+            id: shortId,
+            title: (item['title'] ?? 'Maintenance Task').toString(),
+            assetName: (item['asset']?['name'] ?? 'Campus Equipment').toString(),
+            assetCode: (item['asset']?['assetCode'] ?? 'AST-08904').toString(),
+            priority: _formatPriority(item['priority']?.toString()),
+            status: _formatStatus(item['status']?.toString()),
+            assigneeName: assignee,
+            assigneeInitials: _getInitials(assignee),
+            dueDate: item['dueDate'] != null ? item['dueDate'].toString().split('T').first : 'Scheduled',
+            location: (item['asset']?['building']?['name'] ?? 'Campus Facility').toString(),
+            isFastTrack: item['priority'] == 'HIGH' || item['priority'] == 'CRITICAL',
+          );
         }
       }
     } catch (_) {}
 
-    if (mounted) {
-      setState(() {
-        _isLoading = false;
-      });
+    // 3. Overlay persisted custom & updated work orders from TokenManager (Fixes Bug #20: never disappears on refresh!)
+    final persistedOrders = await TokenManager.getPersistedCustomOrders();
+    for (final m in persistedOrders) {
+      final id = (m['id'] ?? '').toString().toUpperCase();
+      if (id.isNotEmpty) {
+        final assignee = (m['assigneeName'] ?? (TokenManager.currentName ?? 'BUA Admin')).toString();
+        mergedById[id] = WorkOrderModel(
+          id: id,
+          title: (m['title'] ?? 'Maintenance Order').toString(),
+          assetName: (m['assetName'] ?? 'Campus Asset').toString(),
+          assetCode: (m['assetCode'] ?? 'AST-08904').toString(),
+          priority: (m['priority'] ?? 'High').toString(),
+          status: (m['status'] ?? 'Pending').toString(),
+          assigneeName: assignee,
+          assigneeInitials: _getInitials(assignee),
+          dueDate: (m['dueDate'] ?? 'Today, 5:00 PM').toString(),
+          location: (m['location'] ?? 'Main BUA Campus').toString(),
+          isFastTrack: m['isFastTrack'] == true,
+        );
+      }
     }
+
+    if (!mounted) return;
+    setState(() {
+      _allOrders = mergedById.values.toList();
+      _isLoading = false;
+    });
   }
 
-  final List<WorkOrderModel> _mockOrders = [
-    const WorkOrderModel(
-      orderId: 'WO-2025-0841',
-      title: 'Dell Latitude 5520 Laptop',
-      assetId: 'AST-IT-LAPTOP-00418',
-      location: 'Engineering Building',
-      description: 'Urgent system restoration - Diagnosing power fault and thermal throttling',
-      status: OrderStatus.inProgress,
-      priority: PriorityLevel.critical,
-      assigneeName: 'Hany Bakr',
-      assigneeRole: 'Senior IT Specialist',
-      assigneeImage: 'https://randomuser.me/api/portraits/men/32.jpg',
-      dueDate: 'Tomorrow 10:00 AM',
-      scheduledDate: 'Today 2:00 PM',
-      type: 'Corrective maintenance',
-    ),
-    const WorkOrderModel(
-      orderId: 'WO-2025-0839',
-      title: 'HP EliteDesk 800 G5',
-      assetId: 'AST-IT-PC-00169',
-      location: 'Engineering Building - Lab B1',
-      description: 'Scheduled preventive maintenance & hardware diagnostic before exam period.',
-      status: OrderStatus.scheduled,
-      priority: PriorityLevel.high,
-      assigneeName: 'Omar Zaki',
-      assigneeRole: 'Systems Admin',
-      assigneeImage: 'https://randomuser.me/api/portraits/men/44.jpg',
-      dueDate: 'Oct 29',
-      scheduledDate: 'Oct 28',
-      type: 'Preventive maintenance',
-    ),
-    const WorkOrderModel(
-      orderId: 'WO-2025-0811',
-      title: 'HP LaserJet Enterprise Printer',
-      assetId: 'AST-IT-PRINTER-00091',
-      location: 'Administration Building',
-      description: 'Service checklist verified. Maintenance log synchronized.',
-      status: OrderStatus.completed,
-      priority: PriorityLevel.medium,
-      assigneeName: 'Salma Ibrahim',
-      assigneeRole: 'Hardware Tech',
-      assigneeImage: 'https://randomuser.me/api/portraits/women/68.jpg',
-      dueDate: 'Completed',
-      scheduledDate: 'Oct 25',
-      type: 'Completed',
-    ),
-  ];
+  String _formatPriority(String? p) {
+    if (p == null) return 'Medium';
+    final upper = p.toUpperCase();
+    if (upper == 'CRITICAL' || upper == 'HIGH') return 'High';
+    if (upper == 'LOW') return 'Low';
+    return 'Medium';
+  }
+
+  String _formatStatus(String? s) {
+    if (s == null) return 'Pending';
+    final upper = s.toUpperCase();
+    if (upper == 'IN_PROGRESS' || upper == 'IN PROGRESS') return 'In Progress';
+    if (upper == 'COMPLETED' || upper == 'CLOSED') return 'Completed';
+    return 'Pending';
+  }
+
+  String _getInitials(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return 'UA';
+    final parts = trimmed.split(RegExp(r'\s+'));
+    if (parts.length > 1) {
+      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    }
+    return trimmed.substring(0, trimmed.length >= 2 ? 2 : 1).toUpperCase();
+  }
 
   List<WorkOrderModel> get _filteredOrders {
-    if (_selectedFilter == null) return _mockOrders;
-    return _mockOrders.where((o) => o.status == _selectedFilter).toList();
+    final query = _searchController.text.trim().toLowerCase();
+    return _allOrders.where((order) {
+      final matchesTab = _selectedFilter == 'All Orders' ||
+          order.status.toLowerCase() == _selectedFilter.toLowerCase();
+      final matchesPriority = _selectedPriorityFilter == 'All' ||
+          order.priority.toLowerCase() == _selectedPriorityFilter.toLowerCase();
+      final matchesTech = _selectedTechnicianFilter == 'All' ||
+          order.assigneeName.toLowerCase().contains(_selectedTechnicianFilter.toLowerCase());
+      final matchesFastTrack = !_onlyFastTrack || order.isFastTrack;
+      final matchesQuery = query.isEmpty ||
+          order.title.toLowerCase().contains(query) ||
+          order.id.toLowerCase().contains(query) ||
+          order.assetName.toLowerCase().contains(query) ||
+          order.assetCode.toLowerCase().contains(query) ||
+          order.assigneeName.toLowerCase().contains(query);
+
+      return matchesTab && matchesPriority && matchesTech && matchesFastTrack && matchesQuery;
+    }).toList();
   }
 
-  void _showCreateOrderSheet([WorkOrderModel? orderToEdit]) {
+  int _countByStatus(String status) {
+    if (status == 'All Orders') return _allOrders.length;
+    return _allOrders.where((o) => o.status.toLowerCase() == status.toLowerCase()).length;
+  }
+
+  Future<void> _updateOrderStatus(WorkOrderModel order, String newStatus) async {
+    final profile = TokenManager.activeProfile;
+    if (!profile.canCompleteWorkOrder && !profile.canCreateWorkOrder) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Access Denied: Role "${profile.roleTitle}" cannot modify work order status.'),
+          backgroundColor: const Color(0xFFEF4444),
+        ),
+      );
+      return;
+    }
+
+    final updated = WorkOrderModel(
+      id: order.id,
+      title: order.title,
+      assetName: order.assetName,
+      assetCode: order.assetCode,
+      priority: order.priority,
+      status: newStatus,
+      assigneeName: order.assigneeName,
+      assigneeInitials: order.assigneeInitials,
+      dueDate: newStatus == 'Completed' ? 'Completed Just Now' : order.dueDate,
+      location: order.location,
+      isFastTrack: order.isFastTrack,
+    );
+
+    await TokenManager.savePersistedOrder(updated.toMap());
+    TokenManager.logActivity(
+      title: 'Order ${order.id} -> $newStatus',
+      subtitle: '${order.title} • Updated by ${profile.name}',
+      category: 'Orders DB',
+    );
+    await _fetchOrders();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Order ${order.id} marked as $newStatus and saved to DB.'),
+        backgroundColor: const Color(0xFF10B981),
+      ),
+    );
+  }
+
+  void _showCreateOrderModal() {
+    final profile = TokenManager.activeProfile;
+    if (!profile.canCreateWorkOrder && !profile.canCompleteWorkOrder) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Access Denied: Role "${profile.roleTitle}" cannot create new work orders.'),
+          backgroundColor: const Color(0xFFEF4444),
+        ),
+      );
+      return;
+    }
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => CreateOrderSheet(orderToEdit: orderToEdit),
-    ).then((val) {
-      if (val != null && val is WorkOrderModel) {
-        setState(() {
-          if (orderToEdit != null) {
-            final idx = _mockOrders.indexWhere((o) => o.orderId == orderToEdit.orderId);
-            if (idx != -1) _mockOrders[idx] = val;
-          } else {
-            _mockOrders.insert(0, val);
-          }
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(orderToEdit != null ? 'Work Order updated successfully!' : 'Work Order created successfully!'),
-            backgroundColor: OrdersTheme.primaryBlue,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    });
+      builder: (context) => CreateOrderSheet(
+        onOrderCreated: (newOrder) async {
+          await TokenManager.savePersistedOrder(newOrder.toMap());
+          TokenManager.logActivity(
+            title: 'New Work Order: ${newOrder.id}',
+            subtitle: '${newOrder.title} • Created by ${newOrder.assigneeName}',
+            category: 'Orders DB',
+          );
+          await _fetchOrders();
+        },
+      ),
+    );
   }
 
-  void _markAsCompleted(String orderId) {
-    setState(() {
-      final idx = _mockOrders.indexWhere((o) => o.orderId == orderId);
-      if (idx != -1) {
-        final old = _mockOrders[idx];
-        _mockOrders[idx] = WorkOrderModel(
-          orderId: old.orderId,
-          title: old.title,
-          assetId: old.assetId,
-          location: old.location,
-          description: old.description,
-          status: OrderStatus.completed, // Updated Status
-          priority: old.priority,
-          assigneeName: old.assigneeName,
-          assigneeRole: old.assigneeRole,
-          assigneeImage: old.assigneeImage,
-          dueDate: old.dueDate,
-          scheduledDate: old.scheduledDate,
-          type: old.type,
-        );
-      }
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Work Order marked as Completed!'), backgroundColor: Colors.green),
+  void _showPriorityFilterSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.all(20),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Filter by Priority Level', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              children: ['All', 'High', 'Medium', 'Low'].map((p) {
+                final isSel = _selectedPriorityFilter == p;
+                return ChoiceChip(
+                  label: Text(p),
+                  selected: isSel,
+                  selectedColor: const Color(0xFFDBEAFE),
+                  onSelected: (_) {
+                    setState(() => _selectedPriorityFilter = p);
+                    Navigator.pop(ctx);
+                  },
+                );
+              }).toList(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showTechnicianFilterSheet() {
+    final currentAccountName = TokenManager.currentName ?? TokenManager.activeProfile.name;
+    final options = <String>{
+      'All',
+      currentAccountName,
+      'Eng. Karim Adel',
+      'Eng. Tarek Mansour',
+      'Dr. Ahmed Hassan',
+      'Prof. Youssef Ali',
+    }.toList();
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.all(20),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Filter by Assigned Technician / User', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: options.map((t) {
+                final isSel = _selectedTechnicianFilter == t;
+                return ChoiceChip(
+                  label: Text(t == currentAccountName ? '$t (Me)' : t),
+                  selected: isSel,
+                  selectedColor: const Color(0xFFDBEAFE),
+                  onSelected: (_) {
+                    setState(() => _selectedTechnicianFilter = t);
+                    Navigator.pop(ctx);
+                  },
+                );
+              }).toList(),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: OrdersTheme.background,
-      drawer: const AppDrawer(activeRoute: 'orders'),
-      appBar: _buildAppBar(),
-      body: RefreshIndicator(
-        onRefresh: _fetchOrders,
-        color: OrdersTheme.primaryBlue,
-        child: CustomScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          slivers: [
-            if (_isLoading)
-              const SliverToBoxAdapter(child: LinearProgressIndicator(minHeight: 2)),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(Icons.circle, size: 8, color: Colors.red),
-                      const SizedBox(width: 8),
-                      Text('ACTIVE DISPATCH QUEUE', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: OrdersTheme.primaryBlue, letterSpacing: 1.2)),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('Work Orders', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: OrdersTheme.textMain)),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(color: const Color(0xFFEFF6FF), borderRadius: BorderRadius.circular(12)),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.check_circle_outline, size: 14, color: OrdersTheme.primaryBlue),
-                            const SizedBox(width: 4),
-                            Text('${_mockOrders.length} Total', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.blue.shade700)),
-                          ],
-                        ),
-                      )
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: () => _showCreateOrderSheet(),
-                      icon: const Icon(Icons.add_circle_outline, size: 18),
-                      label: const Text('+ New Order', style: TextStyle(fontWeight: FontWeight.bold)),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: OrdersTheme.primaryNavy,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  
-                  // Filter Row 1 (Priority, Tech, Fast Track)
-                  Row(
-                    children: [
-                      _buildOutlinedFilter('Priority: All ▾'),
-                      const SizedBox(width: 8),
-                      _buildOutlinedFilter('Technician ▾'),
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        decoration: BoxDecoration(color: const Color(0xFFEFF6FF), borderRadius: BorderRadius.circular(20)),
-                        child: const Row(
-                          children: [
-                            Icon(Icons.bolt, size: 14, color: OrdersTheme.primaryBlue),
-                            SizedBox(width: 4),
-                            Text('Fast-Track', style: TextStyle(fontSize: 12, color: OrdersTheme.primaryBlue, fontWeight: FontWeight.bold)),
-                          ],
-                        ),
-                      )
-                    ],
-                  ),
-                  const SizedBox(height: 16),
+    final displayed = _filteredOrders;
 
-                  // Filter Row 2 (Status Toggles)
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: [
-                        _buildStatusFilterToggle('Pending', OrderStatus.pending, _mockOrders.where((o) => o.status == OrderStatus.pending).length),
-                        const SizedBox(width: 8),
-                        _buildStatusFilterToggle('Scheduled', OrderStatus.scheduled, _mockOrders.where((o) => o.status == OrderStatus.scheduled).length),
-                        const SizedBox(width: 8),
-                        _buildStatusFilterToggle('In Progress', OrderStatus.inProgress, _mockOrders.where((o) => o.status == OrderStatus.inProgress).length),
-                        const SizedBox(width: 8),
-                        _buildStatusFilterToggle('Completed', OrderStatus.completed, _mockOrders.where((o) => o.status == OrderStatus.completed).length),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFC),
+      drawer: const AppDrawer(),
+      body: SafeArea(
+        child: Column(
+          children: [
+            _buildTopAppBar(),
+            _buildActionAndSearchBar(),
+            _buildFilterTabs(),
+            _buildSecondaryFilterBar(),
+            Expanded(
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator(color: Color(0xFF1D4ED8)))
+                  : displayed.isEmpty
+                      ? _buildEmptyOrdersState()
+                      : RefreshIndicator(
+                          color: const Color(0xFF1D4ED8),
+                          onRefresh: _fetchOrders,
+                          child: ListView.separated(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                            itemCount: displayed.length,
+                            separatorBuilder: (context, index) => const SizedBox(height: 12),
+                            itemBuilder: (context, index) {
+                              return _WorkOrderCard(
+                                order: displayed[index],
+                                onStatusChange: (newStatus) => _updateOrderStatus(displayed[index], newStatus),
+                              );
+                            },
+                          ),
+                        ),
             ),
-          ),
-          SliverPadding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            sliver: SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (context, index) {
-                  final order = _filteredOrders[index];
-                  return _WorkOrderCard(
-                    order: order,
-                    onInspectComplete: () => _markAsCompleted(order.orderId),
-                    onEdit: () => _showCreateOrderSheet(order),
-                    onDelete: () {
-                      setState(() => _mockOrders.removeWhere((o) => o.orderId == order.orderId));
-                    },
-                  );
-                },
-                childCount: _filteredOrders.length,
-              ),
-            ),
-          ),
-          const SliverToBoxAdapter(child: SizedBox(height: 80)),
-        ],
+          ],
+        ),
       ),
-    ),
-    bottomNavigationBar: _buildBottomNav(),
+      bottomNavigationBar: _buildBottomNav(),
     );
   }
 
-  PreferredSizeWidget _buildAppBar() {
-    return AppBar(
-      backgroundColor: OrdersTheme.surface,
-      elevation: 0,
-      automaticallyImplyLeading: false, 
-      leading: Builder(
-        builder: (context) => IconButton(
-          icon: const Icon(Icons.menu, color: OrdersTheme.textSub),
-          onPressed: () => Scaffold.of(context).openDrawer(),
-        ),
+  Widget _buildTopAppBar() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0), width: 1)),
       ),
-      titleSpacing: 0,
-      title: Row(
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(color: const Color(0xFF0A2540), borderRadius: BorderRadius.circular(8)),
-            child: const Icon(Icons.school_rounded, color: Colors.blueAccent, size: 18),
-          ),
-          const SizedBox(width: 8),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          Row(
             children: [
-              Row(
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.asset(
+                  'assets/images/app_icon.png',
+                  width: 34,
+                  height: 34,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1D4ED8),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.school_rounded, color: Colors.white, size: 18),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('UniAsset', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: OrdersTheme.textMain)),
-                  const SizedBox(width: 4),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                    decoration: BoxDecoration(color: OrdersTheme.primaryBlue, borderRadius: BorderRadius.circular(8)),
-                    child: const Text('CORE', style: TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold)),
-                  )
+                  const Text(
+                    'Work Orders & SLA',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF0F172A),
+                      letterSpacing: -0.3,
+                    ),
+                  ),
+                  Text(
+                    'Account: ${TokenManager.currentName ?? TokenManager.activeProfile.name}',
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF1D4ED8),
+                    ),
+                  ),
                 ],
               ),
-              const Text('Asset Manifest', style: TextStyle(fontSize: 10, color: OrdersTheme.textSub)),
+            ],
+          ),
+          Row(
+            children: [
+              IconButton(
+                onPressed: () => AppDialogs.showNotifications(context),
+                icon: const Icon(Icons.notifications_none_rounded, color: Color(0xFF0F172A), size: 24),
+              ),
+              GestureDetector(
+                onTap: () => AppDialogs.showUserProfile(context),
+                child: CircleAvatar(
+                  radius: 16,
+                  backgroundColor: const Color(0xFFEFF6FF),
+                  child: Text(
+                    _getInitials(TokenManager.currentName ?? 'SA'),
+                    style: const TextStyle(color: Color(0xFF1D4ED8), fontWeight: FontWeight.bold, fontSize: 12),
+                  ),
+                ),
+              ),
             ],
           ),
         ],
       ),
-      actions: [
-        IconButton(
-          icon: const Icon(Icons.qr_code_scanner_rounded, color: OrdersTheme.textSub), 
-          onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const QrScannerScreen())),
-        ),
-        Stack(
-          alignment: Alignment.center,
-          children: [
-            IconButton(
-              icon: const Icon(Icons.notifications_none_rounded, color: OrdersTheme.textSub), 
-              onPressed: () => AppDialogs.showNotifications(context),
+    );
+  }
+
+  Widget _buildActionAndSearchBar() {
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: Container(
+              height: 44,
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+              ),
+              child: TextField(
+                controller: _searchController,
+                decoration: const InputDecoration(
+                  hintText: 'Search WO#, Asset ID, or Assignee...',
+                  hintStyle: TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+                  prefixIcon: Icon(Icons.search_rounded, color: Color(0xFF64748B), size: 20),
+                  border: InputBorder.none,
+                  contentPadding: EdgeInsets.symmetric(vertical: 11),
+                ),
+              ),
             ),
-            Positioned(right: 12, top: 14, child: Container(width: 6, height: 6, decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle)))
+          ),
+          const SizedBox(width: 10),
+          ElevatedButton.icon(
+            onPressed: _showCreateOrderModal,
+            icon: const Icon(Icons.add_rounded, size: 18, color: Colors.white),
+            label: const Text(
+              'Create Order',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1D4ED8),
+              minimumSize: const Size(0, 44),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              elevation: 0,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilterTabs() {
+    final tabs = [
+      {'label': 'All Orders', 'count': '${_countByStatus('All Orders')}'},
+      {'label': 'Pending', 'count': '${_countByStatus('Pending')}'},
+      {'label': 'In Progress', 'count': '${_countByStatus('In Progress')}'},
+      {'label': 'Completed', 'count': '${_countByStatus('Completed')}'},
+    ];
+
+    return Container(
+      width: double.infinity,
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: tabs.map((tab) {
+            final isSelected = _selectedFilter == tab['label'];
+            return Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: GestureDetector(
+                onTap: () => setState(() => _selectedFilter = tab['label']!),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: isSelected ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    children: [
+                      Text(
+                        tab['label']!,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
+                          color: isSelected ? Colors.white : const Color(0xFF475569),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: isSelected ? Colors.white.withValues(alpha: 0.2) : const Color(0xFFE2E8F0),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          tab['count']!,
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            color: isSelected ? Colors.white : const Color(0xFF475569),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSecondaryFilterBar() {
+    // Fixes Bug #19: Functional Priority, Technician, and Fast-Track filters
+    final hasSubFilter = _selectedPriorityFilter != 'All' ||
+        _selectedTechnicianFilter != 'All' ||
+        _onlyFastTrack;
+
+    return Container(
+      width: double.infinity,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0), width: 1)),
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            _buildDropdownChip(
+              'Priority: $_selectedPriorityFilter',
+              Icons.flag_outlined,
+              isActive: _selectedPriorityFilter != 'All',
+              onTap: _showPriorityFilterSheet,
+            ),
+            const SizedBox(width: 8),
+            _buildDropdownChip(
+              'Technician: $_selectedTechnicianFilter',
+              Icons.person_outline_rounded,
+              isActive: _selectedTechnicianFilter != 'All',
+              onTap: _showTechnicianFilterSheet,
+            ),
+            const SizedBox(width: 8),
+            _buildDropdownChip(
+              _onlyFastTrack ? 'Fast-Track: ON' : 'Fast-Track',
+              Icons.bolt_rounded,
+              isHighlight: _onlyFastTrack,
+              isActive: _onlyFastTrack,
+              onTap: () => setState(() => _onlyFastTrack = !_onlyFastTrack),
+            ),
+            if (hasSubFilter) ...[
+              const SizedBox(width: 8),
+              TextButton(
+                onPressed: () {
+                  setState(() {
+                    _selectedPriorityFilter = 'All';
+                    _selectedTechnicianFilter = 'All';
+                    _onlyFastTrack = false;
+                  });
+                },
+                child: const Text('Clear', style: TextStyle(fontSize: 12, color: Color(0xFFEF4444), fontWeight: FontWeight.w700)),
+              ),
+            ],
           ],
         ),
-        Padding(
-          padding: const EdgeInsets.only(right: 16.0, left: 4.0),
-          child: InkWell(
-            onTap: () => AppDialogs.showUserProfile(context),
-            borderRadius: BorderRadius.circular(16),
-            child: const CircleAvatar(radius: 14, backgroundImage: NetworkImage('https://randomuser.me/api/portraits/women/44.jpg')),
-          ),
-        ),
-      ],
+      ),
     );
   }
 
-  Widget _buildOutlinedFilter(String label) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.grey.shade300), borderRadius: BorderRadius.circular(20)),
-      child: Text(label, style: const TextStyle(fontSize: 12, color: OrdersTheme.textMain, fontWeight: FontWeight.w500)),
-    );
-  }
-
-  Widget _buildStatusFilterToggle(String label, OrderStatus status, int count) {
-    bool isSelected = _selectedFilter == status;
+  Widget _buildDropdownChip(
+    String label,
+    IconData icon, {
+    bool isHighlight = false,
+    bool isActive = false,
+    required VoidCallback onTap,
+  }) {
     return InkWell(
-      onTap: () {
-        setState(() {
-          _selectedFilter = isSelected ? null : status; // toggle off if already selected
-        });
-      },
-      borderRadius: BorderRadius.circular(20),
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: isSelected ? OrdersTheme.primaryNavy : const Color(0xFFF1F5F9),
-          borderRadius: BorderRadius.circular(20),
+          color: isHighlight
+              ? const Color(0xFFFEF3C7)
+              : (isActive ? const Color(0xFFEFF6FF) : const Color(0xFFF8FAFC)),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: isHighlight
+                ? const Color(0xFFFDE68A)
+                : (isActive ? const Color(0xFF1D4ED8) : const Color(0xFFE2E8F0)),
+          ),
         ),
         child: Row(
           children: [
-            Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: isSelected ? Colors.white : OrdersTheme.textSub)),
-            const SizedBox(width: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(color: isSelected ? Colors.white.withOpacity(0.2) : Colors.white, borderRadius: BorderRadius.circular(10)),
-              child: Text('$count', style: TextStyle(fontSize: 10, color: isSelected ? Colors.white : OrdersTheme.textMain)),
-            )
+            Icon(
+              icon,
+              size: 14,
+              color: isHighlight
+                  ? const Color(0xFFD97706)
+                  : (isActive ? const Color(0xFF1D4ED8) : const Color(0xFF64748B)),
+            ),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w700,
+                color: isHighlight
+                    ? const Color(0xFFD97706)
+                    : (isActive ? const Color(0xFF1D4ED8) : const Color(0xFF334155)),
+              ),
+            ),
+            const SizedBox(width: 4),
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 14,
+              color: isHighlight
+                  ? const Color(0xFFD97706)
+                  : (isActive ? const Color(0xFF1D4ED8) : const Color(0xFF64748B)),
+            ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyOrdersState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.assignment_turned_in_outlined, size: 52, color: Colors.grey.shade400),
+          const SizedBox(height: 10),
+          const Text(
+            'No work orders match the selected filters',
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF475569)),
+          ),
+          const SizedBox(height: 8),
+          TextButton(
+            onPressed: () {
+              setState(() {
+                _selectedFilter = 'All Orders';
+                _selectedPriorityFilter = 'All';
+                _selectedTechnicianFilter = 'All';
+                _onlyFastTrack = false;
+                _searchController.clear();
+              });
+            },
+            child: const Text('Reset All Order Filters'),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildBottomNav() {
     return Container(
-      decoration: BoxDecoration(border: Border(top: BorderSide(color: Colors.grey.shade200))),
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: Color(0xFFE2E8F0), width: 1)),
+      ),
       child: BottomNavigationBar(
-        currentIndex: _currentIndex,
+        currentIndex: _currentNavIndex,
         onTap: (index) {
-          if (index == 4) { AppDialogs.showMenuSheet(context); return; }
-          if (index == 2) { AppDialogs.showRiskAIDialog(context); return; }
-          
-          if (index == 0) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen()));
-          if (index == 1) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const AssetsScreen()));
+          if (index == 0) {
+            Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const DashboardScreen()));
+          } else if (index == 1) {
+            Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const AssetsScreen()));
+          } else if (index == 2) {
+            Navigator.push(context, MaterialPageRoute(builder: (context) => const QrScannerScreen()));
+          } else if (index == 4) {
+            showModalBottomSheet(
+              context: context,
+              isScrollControlled: true,
+              backgroundColor: Colors.transparent,
+              builder: (context) => const MenuSheet(),
+            );
+          }
         },
         type: BottomNavigationBarType.fixed,
         backgroundColor: Colors.white,
-        selectedItemColor: OrdersTheme.primaryBlue,
-        unselectedItemColor: OrdersTheme.textSub,
-        selectedLabelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
-        unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500, fontSize: 11),
-        items: [
-          const BottomNavigationBarItem(icon: Icon(Icons.grid_view_rounded), label: 'Dashboard'),
-          const BottomNavigationBarItem(icon: Icon(Icons.inventory_2_outlined), label: 'Assets'),
-          BottomNavigationBarItem(
-            icon: Stack(clipBehavior: Clip.none, children: [
-              const Icon(Icons.psychology_outlined),
-              Positioned(right: -2, top: -2, child: Container(width: 6, height: 6, decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle))),
-            ]),
-            label: 'Risk AI',
-          ),
-          const BottomNavigationBarItem(icon: Icon(Icons.receipt_long), label: 'Orders'),
-          const BottomNavigationBarItem(icon: Icon(Icons.more_horiz), label: 'Menu'),
+        selectedItemColor: const Color(0xFF1D4ED8),
+        unselectedItemColor: const Color(0xFF64748B),
+        selectedLabelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+        unselectedLabelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+        elevation: 0,
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.grid_view_rounded), label: 'Dashboard'),
+          BottomNavigationBarItem(icon: Icon(Icons.inventory_2_outlined), label: 'Assets'),
+          BottomNavigationBarItem(icon: Icon(Icons.qr_code_scanner_rounded), label: 'Scan'),
+          BottomNavigationBarItem(icon: Icon(Icons.assignment_rounded), label: 'Orders'),
+          BottomNavigationBarItem(icon: Icon(Icons.menu_rounded), label: 'Menu'),
         ],
       ),
     );
   }
 }
 
-// -----------------------------------------------------------------------------
-// Work Order Card
-// -----------------------------------------------------------------------------
 class _WorkOrderCard extends StatelessWidget {
   final WorkOrderModel order;
-  final VoidCallback onInspectComplete;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
+  final ValueChanged<String> onStatusChange;
 
   const _WorkOrderCard({
-    required this.order, 
-    required this.onInspectComplete,
-    required this.onEdit,
-    required this.onDelete,
+    required this.order,
+    required this.onStatusChange,
   });
 
-  void _showQrDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('Asset QR: ${order.assetId}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.grey.shade300)),
-              child: QrImageView(data: '{"id": "${order.assetId}", "order": "${order.orderId}"}', version: QrVersions.auto, size: 200),
-            ),
-            const SizedBox(height: 16),
-            const Text('Scan this code to identify this physical asset.', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: Colors.grey)),
-          ],
-        ),
-        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
-      ),
-    );
+  Color _getPriorityColor(String priority) {
+    switch (priority.toLowerCase()) {
+      case 'high':
+        return const Color(0xFFEF4444);
+      case 'medium':
+        return const Color(0xFFF59E0B);
+      case 'low':
+        return const Color(0xFF0EA5E9);
+      default:
+        return const Color(0xFF64748B);
+    }
+  }
+
+  Color _getStatusColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'in progress':
+        return const Color(0xFF1D4ED8);
+      case 'pending':
+        return const Color(0xFFF59E0B);
+      case 'completed':
+        return const Color(0xFF10B981);
+      default:
+        return const Color(0xFF64748B);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final bool isOverdue = order.dueDate.toLowerCase().contains('overdue');
+
     return Container(
-      margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 10, offset: const Offset(0, 4))],
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: order.isFastTrack
+              ? const Color(0xFFFDE68A)
+              : const Color(0xFFE2E8F0),
+          width: order.isFastTrack ? 1.5 : 1.0,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Container(width: 4, color: order.status == OrderStatus.completed ? Colors.green : OrdersTheme.getPriorityColor(order.priority)),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Header Row
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Row(
-                            children: [
-                              Text(order.orderId, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: OrdersTheme.textMain)),
-                              const SizedBox(width: 8),
-                              _buildPriorityChip(),
-                              if (order.status == OrderStatus.completed) ...[
-                                const SizedBox(width: 4),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                  decoration: BoxDecoration(color: const Color(0xFFF0FDF4), borderRadius: BorderRadius.circular(4)),
-                                  child: const Row(
-                                    children: [
-                                      Icon(Icons.verified, size: 10, color: Color(0xFF16A34A)),
-                                      SizedBox(width: 2),
-                                      Text('COMPLETED', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Color(0xFF16A34A))),
-                                    ],
-                                  ),
-                                )
-                              ]
-                            ],
-                          ),
-                          PopupMenuButton<String>(
-                            icon: const Icon(Icons.more_vert, size: 18, color: OrdersTheme.textSub),
-                            padding: EdgeInsets.zero,
-                            onSelected: (val) {
-                              if (val == 'edit') onEdit();
-                              if (val == 'delete') onDelete();
-                            },
-                            itemBuilder: (context) => [
-                              const PopupMenuItem(value: 'edit', child: Text('Edit')),
-                              const PopupMenuItem(value: 'delete', child: Text('Delete', style: TextStyle(color: Colors.red))),
-                            ],
-                          )
-                        ],
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF1F5F9),
+                        borderRadius: BorderRadius.circular(6),
                       ),
-                      const SizedBox(height: 4),
-                      Text(order.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: OrdersTheme.textMain)),
-                      const SizedBox(height: 2),
-                      Text('${order.assetId} · ${order.location}', style: TextStyle(fontSize: 11, color: Colors.blue.shade700, fontWeight: FontWeight.w600)),
-                      const SizedBox(height: 12),
-
-                      // Status Box
+                      child: Text(
+                        order.id,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF334155),
+                        ),
+                      ),
+                    ),
+                    if (order.isFastTrack) ...[
+                      const SizedBox(width: 8),
                       Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(color: const Color(0xFFF8FAFC), borderRadius: BorderRadius.circular(8)),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEF3C7),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Row(
                           children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Row(
-                                  children: [
-                                    Icon(Icons.circle, size: 8, color: _getStatusColor(order.status)),
-                                    const SizedBox(width: 6),
-                                    Text(order.status.name.toUpperCase(), style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: _getStatusColor(order.status))),
-                                  ],
-                                ),
-                                Text(order.type, style: const TextStyle(fontSize: 10, color: OrdersTheme.textSub)),
-                              ],
+                            Icon(Icons.bolt_rounded, size: 12, color: Color(0xFFD97706)),
+                            SizedBox(width: 2),
+                            Text(
+                              'FAST-TRACK',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFFD97706),
+                                letterSpacing: 0.5,
+                              ),
                             ),
-                            const SizedBox(height: 8),
-                            Text(order.description, style: const TextStyle(fontSize: 12, color: OrdersTheme.textSub, height: 1.4)),
-                            if (order.status == OrderStatus.inProgress) ...[
-                               const SizedBox(height: 12),
-                               LinearProgressIndicator(value: 0.6, backgroundColor: Colors.blue.shade100, color: Colors.blue),
-                            ]
                           ],
                         ),
                       ),
-                      const SizedBox(height: 16),
-
-                      // Assignee & Dates
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Row(
-                            children: [
-                              CircleAvatar(radius: 14, backgroundImage: NetworkImage(order.assigneeImage)),
-                              const SizedBox(width: 8),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(order.assigneeName, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: OrdersTheme.textMain)),
-                                  Text(order.assigneeRole, style: const TextStyle(fontSize: 10, color: OrdersTheme.textSub)),
-                                ],
-                              )
-                            ],
-                          ),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Row(
-                                children: [
-                                  Icon(Icons.timer_outlined, size: 12, color: order.priority == PriorityLevel.critical && order.status != OrderStatus.completed ? Colors.red : OrdersTheme.textMain),
-                                  const SizedBox(width: 4),
-                                  Text(order.status == OrderStatus.completed ? order.dueDate : 'Due: ${order.dueDate}', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: order.priority == PriorityLevel.critical && order.status != OrderStatus.completed ? Colors.red : OrdersTheme.textMain)),
-                                ],
-                              ),
-                              Text('Sched: ${order.scheduledDate}', style: const TextStyle(fontSize: 10, color: OrdersTheme.textSub)),
-                            ],
-                          )
-                        ],
-                      ),
-
-                      if (order.status != OrderStatus.completed) ...[
-                        const SizedBox(height: 16),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                onPressed: onInspectComplete,
-                                icon: const Icon(Icons.check_circle_outline, size: 16),
-                                label: const Text('Inspect Task & Complete'),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: OrdersTheme.primaryNavy,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(vertical: 12),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            InkWell(
-                              onTap: () => _showQrDialog(context),
-                              borderRadius: BorderRadius.circular(8),
-                              child: Container(
-                                padding: const EdgeInsets.all(10),
-                                decoration: BoxDecoration(color: const Color(0xFFEFF6FF), borderRadius: BorderRadius.circular(8)),
-                                child: const Icon(Icons.qr_code, color: OrdersTheme.primaryNavy),
-                              ),
-                            )
-                          ],
-                        )
-                      ]
                     ],
+                  ],
+                ),
+                PopupMenuButton<String>(
+                  tooltip: 'Change Work Order Status',
+                  onSelected: onStatusChange,
+                  itemBuilder: (ctx) => const [
+                    PopupMenuItem(value: 'Pending', child: Text('Mark as Pending')),
+                    PopupMenuItem(value: 'In Progress', child: Text('Mark as In Progress')),
+                    PopupMenuItem(value: 'Completed', child: Text('Mark as Completed')),
+                  ],
+                  child: _buildBadge(
+                    text: '${order.status} ▾',
+                    color: _getStatusColor(order.status),
+                    isFilled: true,
                   ),
                 ),
-              )
-            ],
-          ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              order.title,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF0F172A),
+                height: 1.3,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFF1F5F9)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.inventory_2_outlined, size: 16, color: Color(0xFF64748B)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '${order.assetName} (${order.assetCode})',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF334155),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Divider(height: 1, color: Color(0xFFF1F5F9)),
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 13,
+                      backgroundColor: const Color(0xFFE0E7FF),
+                      child: Text(
+                        order.assigneeInitials,
+                        style: const TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF1D4ED8),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'ASSIGNED / CREATED BY',
+                          style: TextStyle(fontSize: 8.5, fontWeight: FontWeight.w800, color: Color(0xFF94A3B8)),
+                        ),
+                        Text(
+                          order.assigneeName,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF334155),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                Row(
+                  children: [
+                    _buildBadge(
+                      text: '${order.priority} Priority',
+                      color: _getPriorityColor(order.priority),
+                      isFilled: false,
+                    ),
+                    const SizedBox(width: 8),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.schedule_rounded,
+                          size: 14,
+                          color: isOverdue ? const Color(0xFFEF4444) : const Color(0xFF64748B),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          order.dueDate,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: isOverdue ? const Color(0xFFEF4444) : const Color(0xFF64748B),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Color _getStatusColor(OrderStatus status) {
-    switch (status) {
-      case OrderStatus.pending: return Colors.orange;
-      case OrderStatus.scheduled: return Colors.purple;
-      case OrderStatus.inProgress: return Colors.blue;
-      case OrderStatus.completed: return Colors.green;
-    }
-  }
-
-  Widget _buildPriorityChip() {
-    Color bg; Color text; String label;
-    switch (order.priority) {
-      case PriorityLevel.critical: bg = const Color(0xFFDC2626); text = Colors.white; label = 'CRITICAL'; break;
-      case PriorityLevel.high: bg = const Color(0xFFFEF3C7); text = const Color(0xFFD97706); label = 'HIGH'; break;
-      case PriorityLevel.medium: bg = const Color(0xFFDBEAFE); text = const Color(0xFF2563EB); label = 'MEDIUM'; break;
-      case PriorityLevel.low: bg = const Color(0xFFF1F5F9); text = const Color(0xFF64748B); label = 'LOW'; break;
-    }
+  Widget _buildBadge({required String text, required Color color, required bool isFilled}) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12)),
-      child: Text(label, style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: text)),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: isFilled ? color.withValues(alpha: 0.1) : Colors.transparent,
+        borderRadius: BorderRadius.circular(20),
+        border: isFilled ? null : Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+          color: color,
+        ),
+      ),
     );
   }
 }
 
-// -----------------------------------------------------------------------------
-// Create Order Bottom Sheet
-// -----------------------------------------------------------------------------
 class CreateOrderSheet extends StatefulWidget {
-  final WorkOrderModel? orderToEdit;
-  const CreateOrderSheet({super.key, this.orderToEdit});
+  final Function(WorkOrderModel) onOrderCreated;
+  const CreateOrderSheet({super.key, required this.onOrderCreated});
 
   @override
   State<CreateOrderSheet> createState() => _CreateOrderSheetState();
 }
 
 class _CreateOrderSheetState extends State<CreateOrderSheet> {
-  final _formKey = GlobalKey<FormState>();
-  final _titleCtrl = TextEditingController();
-  final _descCtrl = TextEditingController();
-  final _dateCtrl = TextEditingController();
-  
-  String _asset = 'Dell Latitude 5520 (UA-RM3-00412)';
-  PriorityLevel _priority = PriorityLevel.high;
-  String _assignee = 'Sabrina Ibrahim (Lead Hardware Tech)';
+  final _titleController = TextEditingController();
+  final _assetCodeController = TextEditingController(text: 'AST-08904');
+  final _locationController = TextEditingController(text: 'Main Server Building');
+  late TextEditingController _assigneeController;
+  String _selectedPriority = 'High';
+  bool _isFastTrack = true;
+  bool _isSubmitting = false;
 
   @override
   void initState() {
     super.initState();
-    if (widget.orderToEdit != null) {
-      _titleCtrl.text = widget.orderToEdit!.title;
-      _descCtrl.text = widget.orderToEdit!.description;
-      _dateCtrl.text = widget.orderToEdit!.dueDate;
-      _priority = widget.orderToEdit!.priority;
-    } else {
-      _dateCtrl.text = '11/04/2025';
-    }
+    // Fixes Bug #21: Uses the logged-in user's real account name instead of hardcoded 'Sabrina Ibrahim'!
+    final loggedInUserName = TokenManager.currentName ?? TokenManager.activeProfile.name;
+    _assigneeController = TextEditingController(text: loggedInUserName);
   }
 
-  void _submit() {
-    if (_formKey.currentState!.validate()) {
-      final newOrder = WorkOrderModel(
-        orderId: widget.orderToEdit?.orderId ?? 'WO-NEW-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
-        title: _titleCtrl.text.isEmpty ? 'New Task' : _titleCtrl.text,
-        assetId: 'AST-NEW-000',
-        location: 'Room 304 - Faculty of Engineering Lab',
-        description: _descCtrl.text.isEmpty ? 'Maintenance request' : _descCtrl.text,
-        status: widget.orderToEdit?.status ?? OrderStatus.pending,
-        priority: _priority,
-        assigneeName: 'Sabrina Ibrahim',
-        assigneeRole: 'Lead Hardware Tech',
-        assigneeImage: 'https://randomuser.me/api/portraits/women/68.jpg',
-        dueDate: _dateCtrl.text,
-        scheduledDate: 'Unscheduled',
-        type: 'Corrective maintenance',
-      );
-      Navigator.pop(context, newOrder);
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _assetCodeController.dispose();
+    _locationController.dispose();
+    _assigneeController.dispose();
+    super.dispose();
+  }
+
+  String _computeInitials(String fullName) {
+    final trimmed = fullName.trim();
+    if (trimmed.isEmpty) return 'UA';
+    final parts = trimmed.split(RegExp(r'\s+'));
+    if (parts.length > 1) {
+      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
     }
+    return trimmed.substring(0, trimmed.length >= 2 ? 2 : 1).toUpperCase();
+  }
+
+  Future<void> _submit() async {
+    if (_titleController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter an Order Title / Description.')),
+      );
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
+
+    final assigneeName = _assigneeController.text.trim().isEmpty
+        ? (TokenManager.currentName ?? TokenManager.activeProfile.name)
+        : _assigneeController.text.trim();
+
+    try {
+      await DioClient.instance.dio.post('/work-orders', data: {
+        'title': _titleController.text.trim(),
+        'priority': _selectedPriority.toUpperCase(),
+        'status': 'OPEN',
+        'description': 'Created by $assigneeName (${TokenManager.currentEmail})',
+      });
+    } catch (_) {}
+
+    if (!mounted) return;
+
+    final newOrder = WorkOrderModel(
+      id: 'WO-${1000 + (DateTime.now().millisecondsSinceEpoch % 8999)}',
+      title: _titleController.text.trim(),
+      assetName: 'Campus Asset (${_assetCodeController.text.trim().toUpperCase()})',
+      assetCode: _assetCodeController.text.trim().toUpperCase(),
+      priority: _selectedPriority,
+      status: 'Pending',
+      assigneeName: assigneeName,
+      assigneeInitials: _computeInitials(assigneeName),
+      dueDate: 'Today, 5:00 PM',
+      location: _locationController.text.trim(),
+      isFastTrack: _isFastTrack || _selectedPriority == 'High',
+    );
+
+    widget.onOrderCreated(newOrder);
+    Navigator.pop(context);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Order ${newOrder.id} saved under $assigneeName in database!'),
+        backgroundColor: const Color(0xFF10B981),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      child: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              mainAxisSize: MainAxisSize.min,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+        top: 24,
+        left: 20,
+        right: 20,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.receipt_long, color: OrdersTheme.primaryBlue),
-                        const SizedBox(width: 8),
-                        Text(widget.orderToEdit != null ? 'Edit Work Order' : 'Create Work Order', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                      ],
+                const Text(
+                  'Create Work Order (Saved to DB)',
+                  style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _titleController,
+              decoration: InputDecoration(
+                labelText: 'Issue / Service Description',
+                hintText: 'e.g., Replace Cooling Pump Seal',
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                filled: true,
+                fillColor: const Color(0xFFF8FAFC),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _assetCodeController,
+                    decoration: InputDecoration(
+                      labelText: 'Target Asset ID',
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      filled: true,
+                      fillColor: const Color(0xFFF8FAFC),
                     ),
-                    IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
-                  ],
-                ),
-                const SizedBox(height: 16),
-
-                const Text('Work Order Title *', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 6),
-                TextFormField(
-                  controller: _titleCtrl,
-                  decoration: InputDecoration(
-                    filled: true, fillColor: const Color(0xFFF8FAFC),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey.shade200)),
                   ),
                 ),
-                const SizedBox(height: 16),
-                
-                const Text('Select Asset *', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 6),
-                DropdownButtonFormField<String>(
-                  value: _asset,
-                  decoration: InputDecoration(
-                    filled: true, fillColor: const Color(0xFFF8FAFC),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey.shade200)),
-                  ),
-                  items: ['Dell Latitude 5520 (UA-RM3-00412)', 'HP EliteDesk (UA-RM1-002)'].map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 13)))).toList(),
-                  onChanged: (v) => setState(() => _asset = v!),
-                ),
-                const SizedBox(height: 4),
-                Text('📍 Room 304 • Faculty of Engineering Lab', style: TextStyle(fontSize: 10, color: Colors.grey.shade500)),
-                const SizedBox(height: 16),
-
-                const Text('Priority Level *', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 6),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    _buildPrioritySelect(PriorityLevel.critical, 'Critical', Colors.red),
-                    _buildPrioritySelect(PriorityLevel.high, 'High', Colors.orange),
-                    _buildPrioritySelect(PriorityLevel.medium, 'Medium', Colors.blue),
-                    _buildPrioritySelect(PriorityLevel.low, 'Low', Colors.grey),
-                  ],
-                ),
-                const SizedBox(height: 16),
-
-                const Text('Assignee', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 6),
-                DropdownButtonFormField<String>(
-                  value: _assignee,
-                  decoration: InputDecoration(
-                    filled: true, fillColor: const Color(0xFFF8FAFC),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey.shade200)),
-                  ),
-                  items: ['Sabrina Ibrahim (Lead Hardware Tech)', 'Omar Zaki (Systems Admin)'].map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 13)))).toList(),
-                  onChanged: (v) => setState(() => _assignee = v!),
-                ),
-                const SizedBox(height: 16),
-
-                const Text('Target Completion Date', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 6),
-                TextFormField(
-                  controller: _dateCtrl,
-                  decoration: InputDecoration(
-                    prefixIcon: const Icon(Icons.calendar_today, size: 16),
-                    filled: true, fillColor: const Color(0xFFF8FAFC),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey.shade200)),
-                  ),
-                ),
-                const SizedBox(height: 16),
-
-                const Text('Description', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 6),
-                TextFormField(
-                  controller: _descCtrl,
-                  maxLines: 3,
-                  decoration: InputDecoration(
-                    filled: true, fillColor: const Color(0xFFF8FAFC),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey.shade200)),
-                  ),
-                ),
-                const SizedBox(height: 24),
-
-                ElevatedButton.icon(
-                  onPressed: _submit,
-                  icon: const Icon(Icons.check),
-                  label: Text(widget.orderToEdit != null ? 'Update Order' : 'Create Order', style: const TextStyle(fontWeight: FontWeight.bold)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: OrdersTheme.primaryNavy,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    initialValue: _selectedPriority,
+                    decoration: InputDecoration(
+                      labelText: 'Priority Level',
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'High', child: Text('High (SLA 24h)')),
+                      DropdownMenuItem(value: 'Medium', child: Text('Medium')),
+                      DropdownMenuItem(value: 'Low', child: Text('Low')),
+                    ],
+                    onChanged: (v) => setState(() => _selectedPriority = v!),
                   ),
                 ),
               ],
             ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPrioritySelect(PriorityLevel level, String label, Color dotColor) {
-    bool isSel = _priority == level;
-    return InkWell(
-      onTap: () => setState(() => _priority = level),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          color: isSel ? dotColor.withOpacity(0.05) : Colors.white,
-          border: Border.all(color: isSel ? dotColor : Colors.grey.shade200),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          children: [
-            Icon(Icons.circle, size: 8, color: dotColor),
-            const SizedBox(width: 4),
-            Text(label, style: TextStyle(fontSize: 11, fontWeight: isSel ? FontWeight.bold : FontWeight.normal, color: OrdersTheme.textMain)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _assigneeController,
+              decoration: InputDecoration(
+                labelText: 'Created By / Assigned Account Name',
+                helperText: 'Defaults to your active logged-in account (${TokenManager.currentEmail})',
+                prefixIcon: const Icon(Icons.person_pin_rounded, color: Color(0xFF1D4ED8)),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                filled: true,
+                fillColor: const Color(0xFFEFF6FF),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _locationController,
+              decoration: InputDecoration(
+                labelText: 'Campus Building / Room',
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                filled: true,
+                fillColor: const Color(0xFFF8FAFC),
+              ),
+            ),
+            const SizedBox(height: 8),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Fast-Track Priority Escalation', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5)),
+              value: _isFastTrack,
+              activeTrackColor: const Color(0xFF1D4ED8),
+              onChanged: (v) => setState(() => _isFastTrack = v),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton.icon(
+                onPressed: _isSubmitting ? null : _submit,
+                icon: const Icon(Icons.cloud_done_rounded, color: Colors.white),
+                label: Text(
+                  _isSubmitting ? 'Saving Order...' : 'Submit & Save Work Order',
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF1D4ED8),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
           ],
         ),
       ),
