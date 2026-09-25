@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:asset_management/core/network/dio_client.dart';
 import 'package:asset_management/core/security/token_manager.dart';
@@ -169,6 +170,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   ];
 
   int _selectedScopeIndex = 0;
+  Timer? _cloudSyncTimer;
 
   _CampusZoneScope get _activeScope => _campusScopes[_selectedScopeIndex];
 
@@ -176,15 +178,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     _fetchDashboardData();
+    _cloudSyncTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (mounted) _fetchDashboardData();
+    });
   }
 
   @override
   void dispose() {
+    _cloudSyncTimer?.cancel();
     _topSearchController.dispose();
     super.dispose();
   }
 
   Future<void> _fetchDashboardData() async {
+    await TokenManager.syncFromCloudDb();
     try {
       await DioClient.instance.dio.get('/reports/executive-kpis');
     } catch (_) {
@@ -736,7 +743,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Badya University',
+                    'Badr University',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w800,

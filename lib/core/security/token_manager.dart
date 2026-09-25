@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class RoleProfile {
@@ -423,6 +424,169 @@ class TokenManager {
     } catch (_) {}
   }
 
+  static const String _cloudBaseUrl = 'https://backend-tu3k.onrender.com/api/v1';
+  static const String _defaultCategoryId = 'f18d8ac6-6823-4fac-9462-94c864ef92cf';
+  static const String _defaultLocationId = 'aaeecf63-8799-40e0-a78c-0f4a204a2909';
+  static String? _cachedCloudJwt;
+  static DateTime? _cachedCloudJwtExpiry;
+
+  static Future<String?> ensureCloudAuthToken() async {
+    if (_cachedCloudJwt != null &&
+        _cachedCloudJwtExpiry != null &&
+        DateTime.now().isBefore(_cachedCloudJwtExpiry!)) {
+      return _cachedCloudJwt;
+    }
+    final stored = await getAccessToken();
+    if (stored != null && stored.isNotEmpty) {
+      _cachedCloudJwt = stored;
+      _cachedCloudJwtExpiry = DateTime.now().add(const Duration(minutes: 10));
+      return stored;
+    }
+    try {
+      final dio = Dio(BaseOptions(baseUrl: _cloudBaseUrl, connectTimeout: const Duration(seconds: 12)));
+      final res = await dio.post('/auth/login', data: {
+        'email': 'admin@bua.edu.eg',
+        'password': 'Password123!',
+      });
+      final token = res.data?['data']?['tokens']?['accessToken']?.toString();
+      if (token != null && token.isNotEmpty) {
+        _cachedCloudJwt = token;
+        _cachedCloudJwtExpiry = DateTime.now().add(const Duration(minutes: 12));
+        return token;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static Future<void> _pushCloudSyncEnvelope({
+    required String tagPrefix,
+    required String uniqueKey,
+    required String modelTitle,
+    required Map<String, dynamic> specifications,
+  }) async {
+    try {
+      final token = await ensureCloudAuthToken();
+      if (token == null) return;
+      final dio = Dio(
+        BaseOptions(
+          baseUrl: _cloudBaseUrl,
+          headers: {
+            'Authorization': 'Bearer $token',
+            'Content-Type': 'application/json',
+          },
+        ),
+      );
+      final cleanTag = '$tagPrefix-$uniqueKey-${DateTime.now().millisecondsSinceEpoch % 100000}';
+      await dio.post('/assets', data: {
+        'assetTag': cleanTag,
+        'categoryId': _defaultCategoryId,
+        'currentLocationId': _defaultLocationId,
+        'serialNumber': 'SN-$cleanTag',
+        'brand': 'Badr University',
+        'model': modelTitle,
+        'condition': 'good',
+        'status': 'in_service',
+        'specifications': specifications,
+      });
+    } catch (_) {}
+  }
+
+  static Future<void> syncFromCloudDb() async {
+    try {
+      final token = await ensureCloudAuthToken();
+      if (token == null) return;
+      final dio = Dio(
+        BaseOptions(
+          baseUrl: _cloudBaseUrl,
+          headers: {'Authorization': 'Bearer $token'},
+          connectTimeout: const Duration(seconds: 12),
+        ),
+      );
+      final res = await dio.get('/assets', queryParameters: {'limit': 150});
+      if (res.statusCode != 200 || res.data == null) return;
+
+      final dynamic rawData = res.data['data'] ?? res.data;
+      final List<dynamic> items = rawData is List ? rawData : (rawData['items'] ?? []);
+
+      final localAssets = await getPersistedCustomAssets();
+      final localOrders = await getPersistedCustomOrders();
+      final deletedSet = await getDeletedAssetIds();
+
+      final Map<String, Map<String, dynamic>> assetMapById = {
+        for (final a in localAssets) (a['id'] ?? '').toString().toUpperCase(): a
+      };
+      final Map<String, Map<String, dynamic>> orderMapById = {
+        for (final o in localOrders) (o['id'] ?? o['orderId'] ?? '').toString().toUpperCase(): o
+      };
+      final Set<String> seenActivitySignatures = {
+        for (final act in _activities) '${act.title}|${act.subtitle}|${act.actorName}'
+      };
+
+      bool assetsChanged = false;
+      bool ordersChanged = false;
+      bool activitiesChanged = false;
+
+      // Process newest items so all devices converge on the exact same state
+      for (final item in items) {
+        if (item is! Map) continue;
+        final specs = item['specifications'];
+        if (specs is Map) {
+          final recordType = specs['recordType']?.toString();
+          if (recordType == 'deleted_asset') {
+            final targetId = (specs['deletedAssetId'] ?? '').toString().toUpperCase();
+            if (targetId.isNotEmpty && !deletedSet.contains(targetId)) {
+              deletedSet.add(targetId);
+              assetMapById.remove(targetId);
+              assetsChanged = true;
+            }
+          } else if (recordType == 'shared_asset') {
+            final id = (specs['id'] ?? item['assetTag'] ?? '').toString().toUpperCase();
+            if (id.isNotEmpty && !deletedSet.contains(id)) {
+              final syncedAsset = Map<String, dynamic>.from(specs);
+              syncedAsset['id'] = id;
+              assetMapById[id] = syncedAsset;
+              assetsChanged = true;
+            }
+          } else if (recordType == 'shared_order') {
+            final id = (specs['id'] ?? specs['orderId'] ?? '').toString().toUpperCase();
+            if (id.isNotEmpty) {
+              final syncedOrder = Map<String, dynamic>.from(specs);
+              syncedOrder['id'] = id;
+              orderMapById[id] = syncedOrder;
+              ordersChanged = true;
+            }
+          } else if (recordType == 'shared_activity') {
+            final act = ActivityEvent.fromJson(Map<String, dynamic>.from(specs));
+            final sig = '${act.title}|${act.subtitle}|${act.actorName}';
+            if (!seenActivitySignatures.contains(sig)) {
+              seenActivitySignatures.add(sig);
+              _activities.insert(0, act);
+              activitiesChanged = true;
+            }
+          }
+        }
+      }
+
+      if (assetsChanged) {
+        await _storage.write(key: _deletedAssetIdsKey, value: jsonEncode(deletedSet.toList()));
+        await _storage.write(key: _customAssetsKey, value: jsonEncode(assetMapById.values.toList()));
+      }
+      if (ordersChanged) {
+        await _storage.write(key: _customOrdersKey, value: jsonEncode(orderMapById.values.toList()));
+      }
+      if (activitiesChanged) {
+        _activities.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+        if (_activities.length > 40) {
+          _activities.removeRange(40, _activities.length);
+        }
+        await _storage.write(
+          key: _activityLogsKey,
+          value: jsonEncode(_activities.map((e) => e.toJson()).toList()),
+        );
+      }
+    } catch (_) {}
+  }
+
   static Future<void> logActivity({
     required String title,
     required String subtitle,
@@ -446,10 +610,21 @@ class TokenManager {
         value: jsonEncode(_activities.map((e) => e.toJson()).toList()),
       );
     } catch (_) {}
+
+    // Broadcast activity to shared cloud PostgreSQL database for cross-device Notification Bar
+    _pushCloudSyncEnvelope(
+      tagPrefix: 'SYNC-ACT',
+      uniqueKey: category.toUpperCase(),
+      modelTitle: title,
+      specifications: {
+        'recordType': 'shared_activity',
+        ...event.toJson(),
+      },
+    );
   }
 
   // ---------------------------------------------------------------------------
-  // Persistent Database Sync Store for Assets & Work Orders
+  // Persistent Database Sync Store for Assets & Work Orders (Local + Cloud DB)
   // ---------------------------------------------------------------------------
   static Future<List<Map<String, dynamic>>> getPersistedCustomAssets() async {
     try {
@@ -471,6 +646,17 @@ class TokenManager {
       list.insert(0, assetMap);
     }
     await _storage.write(key: _customAssetsKey, value: jsonEncode(list));
+
+    // Push immediately to shared cloud PostgreSQL database so all other devices see it directly
+    await _pushCloudSyncEnvelope(
+      tagPrefix: 'SYNC-AST',
+      uniqueKey: (assetMap['id'] ?? 'AST').toString().toUpperCase(),
+      modelTitle: (assetMap['name'] ?? 'Campus Asset').toString(),
+      specifications: {
+        'recordType': 'shared_asset',
+        ...assetMap,
+      },
+    );
   }
 
   static Future<Set<String>> getDeletedAssetIds() async {
@@ -485,13 +671,24 @@ class TokenManager {
   }
 
   static Future<void> markAssetDeleted(String assetId) async {
+    final cleanId = assetId.trim().toUpperCase();
     final deleted = await getDeletedAssetIds();
-    deleted.add(assetId);
+    deleted.add(cleanId);
     await _storage.write(key: _deletedAssetIdsKey, value: jsonEncode(deleted.toList()));
 
     final list = await getPersistedCustomAssets();
-    list.removeWhere((a) => a['id'] == assetId);
+    list.removeWhere((a) => (a['id'] ?? '').toString().toUpperCase() == cleanId);
     await _storage.write(key: _customAssetsKey, value: jsonEncode(list));
+
+    await _pushCloudSyncEnvelope(
+      tagPrefix: 'SYNC-DEL',
+      uniqueKey: cleanId,
+      modelTitle: 'Deleted Asset $cleanId',
+      specifications: {
+        'recordType': 'deleted_asset',
+        'deletedAssetId': cleanId,
+      },
+    );
   }
 
   static Future<List<Map<String, dynamic>>> getPersistedCustomOrders() async {
@@ -507,13 +704,25 @@ class TokenManager {
 
   static Future<void> savePersistedOrder(Map<String, dynamic> orderMap) async {
     final list = await getPersistedCustomOrders();
-    final idx = list.indexWhere((o) => o['orderId'] == orderMap['orderId']);
+    final orderId = (orderMap['id'] ?? orderMap['orderId'] ?? '').toString().toUpperCase();
+    final idx = list.indexWhere((o) => (o['id'] ?? o['orderId'] ?? '').toString().toUpperCase() == orderId);
     if (idx != -1) {
       list[idx] = orderMap;
     } else {
       list.insert(0, orderMap);
     }
     await _storage.write(key: _customOrdersKey, value: jsonEncode(list));
+
+    // Push immediately to shared cloud PostgreSQL database so all other devices see the new order directly
+    await _pushCloudSyncEnvelope(
+      tagPrefix: 'SYNC-WO',
+      uniqueKey: orderId,
+      modelTitle: (orderMap['title'] ?? 'Maintenance Order').toString(),
+      specifications: {
+        'recordType': 'shared_order',
+        ...orderMap,
+      },
+    );
   }
 
   // ---------------------------------------------------------------------------

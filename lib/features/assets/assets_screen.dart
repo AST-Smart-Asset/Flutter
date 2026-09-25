@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:asset_management/core/network/dio_client.dart';
 import 'package:asset_management/core/security/token_manager.dart';
@@ -158,22 +159,32 @@ class _AssetsScreenState extends State<AssetsScreen> {
 
   List<AssetModel> _allAssets = [];
   List<AssetModel> _displayedAssets = [];
+  Timer? _cloudSyncTimer;
 
   @override
   void initState() {
     super.initState();
     _searchController.addListener(_applyFiltersAndSort);
     _fetchAssets();
+    _cloudSyncTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (mounted) _fetchAssets(silent: true);
+    });
   }
 
   @override
   void dispose() {
+    _cloudSyncTimer?.cancel();
     _searchController.dispose();
     super.dispose();
   }
 
-  Future<void> _fetchAssets() async {
-    setState(() => _isLoading = true);
+  Future<void> _fetchAssets({bool silent = false}) async {
+    if (!silent) {
+      setState(() => _isLoading = true);
+    }
+
+    // Pull latest cross-device assets, deletions, and notifications from Cloud DB
+    await TokenManager.syncFromCloudDb();
 
     final deletedIds = await TokenManager.getDeletedAssetIds();
     final persistedMaps = await TokenManager.getPersistedCustomAssets();
@@ -189,25 +200,27 @@ class _AssetsScreenState extends State<AssetsScreen> {
 
     // 2. Try fetching live backend assets
     try {
-      final response = await DioClient.instance.dio.get('/assets');
+      final response = await DioClient.instance.dio.get('/assets', queryParameters: {'limit': 50});
       if (response.statusCode == 200 && response.data != null) {
         final dynamic rawData = response.data['data'] ?? response.data;
         final List<dynamic> items = rawData is List ? rawData : (rawData['items'] ?? []);
         for (final item in items) {
-          final code = (item['assetCode'] ?? item['id'] ?? '').toString().toUpperCase();
-          if (code.isNotEmpty && !deletedIds.contains(code)) {
-            final pred = TokenManager.evaluateWithLightGbm(assetTag: code);
+          final rawTag = (item['assetTag'] ?? item['assetCode'] ?? '').toString().toUpperCase();
+          if (rawTag.startsWith('SYNC-')) continue; // Handled by syncFromCloudDb()
+          if (rawTag.isNotEmpty && !deletedIds.contains(rawTag)) {
+            final pred = TokenManager.evaluateWithLightGbm(assetTag: rawTag);
             final isHigh = pred['predicted_failure_30d'] == 1;
-            mergedById[code] = AssetModel(
-              id: code,
-              name: (item['name'] ?? 'Campus Asset').toString(),
+            final itemName = (item['name'] ?? item['model'] ?? 'Campus Asset').toString();
+            mergedById[rawTag] = AssetModel(
+              id: rawTag,
+              name: itemName,
               category: (item['category'] is Map ? item['category']['name'] : item['category'] ?? 'IT Equipment').toString(),
               subCategory: 'LightGBM Tracked (${pred['probability_percent']}%)',
-              location: (item['building'] is Map ? item['building']['name'] : item['location'] ?? 'Main Campus').toString(),
+              location: (item['currentLocation'] is Map ? item['currentLocation']['name'] : item['location'] ?? 'Badr University Campus').toString(),
               subLocation: (item['room'] is Map ? item['room']['name'] : 'Active Zone').toString(),
               status: (item['status'] ?? 'Active').toString(),
               condition: (item['condition'] ?? 'Good').toString(),
-              custodian: (item['custodian'] is Map ? item['custodian']['fullName'] : item['custodian'] ?? 'Assigned').toString(),
+              custodian: (item['custodian'] is Map ? item['custodian']['fullName'] : item['custodian'] ?? 'Badr University Custody').toString(),
               lastAudit: 'Verified ISO-55000',
               riskScore: isHigh ? 'High' : 'Low',
               icon: _getCategoryIcon((item['category'] is Map ? item['category']['name'] : item['category'])?.toString()),
@@ -216,10 +229,10 @@ class _AssetsScreenState extends State<AssetsScreen> {
         }
       }
     } catch (_) {
-      // Uses merged local + persisted database records
+      // Uses merged local + persisted cloud database records
     }
 
-    // 3. Overlay persisted custom/updated assets from TokenManager so they never disappear
+    // 3. Overlay persisted custom/updated assets from TokenManager (includes all cross-device shared_asset records)
     for (final m in persistedMaps) {
       final code = (m['id'] ?? m['assetCode'] ?? '').toString().toUpperCase();
       if (code.isNotEmpty && !deletedIds.contains(code)) {
@@ -594,7 +607,7 @@ class _AssetsScreenState extends State<AssetsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Campus Assets',
+                    'Badr University • Assets',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w800,

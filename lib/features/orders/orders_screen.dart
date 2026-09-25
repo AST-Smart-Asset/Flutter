@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:asset_management/core/network/dio_client.dart';
 import 'package:asset_management/core/security/token_manager.dart';
@@ -123,22 +124,32 @@ class _OrdersScreenState extends State<OrdersScreen> {
   ];
 
   List<WorkOrderModel> _allOrders = [];
+  Timer? _cloudSyncTimer;
 
   @override
   void initState() {
     super.initState();
     _searchController.addListener(() => setState(() {}));
     _fetchOrders();
+    _cloudSyncTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (mounted) _fetchOrders(silent: true);
+    });
   }
 
   @override
   void dispose() {
+    _cloudSyncTimer?.cancel();
     _searchController.dispose();
     super.dispose();
   }
 
-  Future<void> _fetchOrders() async {
-    setState(() => _isLoading = true);
+  Future<void> _fetchOrders({bool silent = false}) async {
+    if (!silent) {
+      setState(() => _isLoading = true);
+    }
+
+    // Pull latest cross-device work orders & notifications from Cloud DB
+    await TokenManager.syncFromCloudDb();
 
     final Map<String, WorkOrderModel> mergedById = {};
 
@@ -491,7 +502,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Work Orders & SLA',
+                    'Badr University • Orders',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w800,

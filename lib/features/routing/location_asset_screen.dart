@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/security/token_manager.dart';
 import '../dashboard/dashboard_screen.dart';
 import '../assets/assets_screen.dart';
 import '../assets/views/qr_scanner_screen.dart';
@@ -106,41 +107,45 @@ class _LocationAssetScreenState extends State<LocationAssetScreen> {
   // ---------------------------------------------------------------------------
 
   PreferredSizeWidget _buildAppBar() {
+    final profile = TokenManager.activeProfile;
+    final activityCount = TokenManager.activities.length;
     return AppBar(
       backgroundColor: RoutingTheme.surface,
       elevation: 0,
       automaticallyImplyLeading: false,
       title: Row(
         children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: const Color(0xFF161B22),
-              borderRadius: BorderRadius.circular(8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: Image.asset(
+              'assets/images/app_icon.png',
+              width: 38,
+              height: 38,
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: RoutingTheme.primaryBlue,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.school_rounded, color: Colors.white, size: 22),
+              ),
             ),
-            child: const Icon(Icons.school_rounded, color: Colors.blueAccent, size: 20),
           ),
-          const SizedBox(width: RoutingTheme.spacingSm),
+          const SizedBox(width: 10),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Row(
-                children: [
-                  const Text('UniAsset', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: RoutingTheme.textMain)),
-                  const SizedBox(width: 6),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: RoutingTheme.primaryBlue,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Text('CORE', style: TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold)),
-                  )
-                ],
+              const Text(
+                'Badr University',
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16, color: RoutingTheme.textMain),
               ),
-              const Text('BADR UNIVERSITY\nASSIUT', style: TextStyle(fontSize: 9, color: RoutingTheme.primaryBlue, fontWeight: FontWeight.bold, height: 1.1)),
+              Text(
+                'ASSIUT TELEMETRY • ${profile.roleTitle.toUpperCase()}',
+                style: const TextStyle(fontSize: 9.5, color: RoutingTheme.primaryBlue, fontWeight: FontWeight.w700, letterSpacing: 0.4),
+              ),
             ],
           ),
         ],
@@ -155,24 +160,38 @@ class _LocationAssetScreenState extends State<LocationAssetScreen> {
           children: [
             IconButton(
               icon: const Icon(Icons.notifications_none, color: RoutingTheme.textSub),
-              onPressed: () {},
+              onPressed: () {
+                AppDialogs.showNotifications(context);
+                setState(() {});
+              },
             ),
-            Positioned(
-              right: 12,
-              top: 12,
-              child: Container(
-                width: 8,
-                height: 8,
-                decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+            if (activityCount > 0)
+              Positioned(
+                right: 10,
+                top: 10,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(8)),
+                  child: Text(
+                    activityCount > 9 ? '9+' : '$activityCount',
+                    style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
+                  ),
+                ),
               ),
-            )
           ],
         ),
-        const Padding(
-          padding: EdgeInsets.only(right: 16.0, left: 8.0),
-          child: CircleAvatar(
-            radius: 16,
-            backgroundImage: NetworkImage('https://randomuser.me/api/portraits/women/44.jpg'),
+        Padding(
+          padding: const EdgeInsets.only(right: 16.0, left: 6.0),
+          child: GestureDetector(
+            onTap: () => AppDialogs.showUserProfile(context),
+            child: CircleAvatar(
+              radius: 16,
+              backgroundColor: const Color(0xFFEFF6FF),
+              child: Text(
+                (TokenManager.currentName ?? profile.name).substring(0, 1).toUpperCase(),
+                style: const TextStyle(color: RoutingTheme.primaryBlue, fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+            ),
           ),
         ),
       ],
@@ -513,8 +532,8 @@ class _LocationAssetScreenState extends State<LocationAssetScreen> {
         children: [
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
-            child: Image.network(
-              'https://randomuser.me/api/portraits/women/44.jpg',
+            child: Image.asset(
+              'assets/images/app_icon.png',
               width: 44,
               height: 44,
               fit: BoxFit.cover,
@@ -527,7 +546,13 @@ class _LocationAssetScreenState extends State<LocationAssetScreen> {
               children: [
                 Row(
                   children: [
-                    const Text('Dr. Elena Rostova', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: RoutingTheme.textMain)),
+                    Flexible(
+                      child: Text(
+                        TokenManager.currentName ?? TokenManager.activeProfile.name,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: RoutingTheme.textMain),
+                      ),
+                    ),
                     const SizedBox(width: 8),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -535,19 +560,27 @@ class _LocationAssetScreenState extends State<LocationAssetScreen> {
                         color: Colors.indigo.shade50,
                         borderRadius: BorderRadius.circular(10),
                       ),
-                      child: Text('Admin', style: TextStyle(color: Colors.indigo.shade700, fontSize: 9, fontWeight: FontWeight.bold)),
+                      child: Text(
+                        TokenManager.activeProfile.roleTitle,
+                        style: TextStyle(color: Colors.indigo.shade700, fontSize: 9, fontWeight: FontWeight.bold),
+                      ),
                     )
                   ],
                 ),
                 const SizedBox(height: 2),
-                const Text('Badr Univ • Zone A Main', style: TextStyle(fontSize: 11, color: RoutingTheme.textSub)),
+                Text(
+                  'Badr University • ${TokenManager.activeProfile.department}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11, color: RoutingTheme.textSub),
+                ),
               ],
             ),
           ),
           TextButton.icon(
-            onPressed: () {},
-            icon: const Icon(Icons.help_outline, size: 14),
-            label: const Text('SOP', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+            onPressed: () => AppDialogs.showUserProfile(context),
+            icon: const Icon(Icons.verified_user_outlined, size: 14),
+            label: const Text('Role', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
             style: TextButton.styleFrom(
               backgroundColor: RoutingTheme.inputBg,
               foregroundColor: RoutingTheme.primaryBlue,

@@ -714,41 +714,6 @@ class _LoginScreenState extends State<LoginScreen> {
                                         ),
                                       ),
                                     ],
-
-                                    const SizedBox(height: 20),
-                                    const Divider(height: 1),
-                                    const SizedBox(height: 12),
-                                    const Text(
-                                      'Available University Role Accounts (Tap to fill or type manually):',
-                                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF64748B)),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Wrap(
-                                      spacing: 6,
-                                      runSpacing: 6,
-                                      children: TokenManager.roleProfilesByEmail.values.map((roleProf) {
-                                        final isSelected = _userIdController.text.trim().toLowerCase() == roleProf.email;
-                                        return ActionChip(
-                                          visualDensity: VisualDensity.compact,
-                                          backgroundColor: isSelected ? const Color(0xFFDBEAFE) : const Color(0xFFF8FAFC),
-                                          side: BorderSide(color: isSelected ? const Color(0xFF2563EB) : Colors.grey.shade300),
-                                          label: Text(
-                                            '${roleProf.roleName} (${roleProf.email.split('@').first})',
-                                            style: TextStyle(
-                                              fontSize: 10,
-                                              fontWeight: FontWeight.w600,
-                                              color: isSelected ? const Color(0xFF1E40AF) : const Color(0xFF334155),
-                                            ),
-                                          ),
-                                          onPressed: () {
-                                            setState(() {
-                                              _userIdController.text = roleProf.email;
-                                              _passwordController.text = 'Password123!';
-                                            });
-                                          },
-                                        );
-                                      }).toList(),
-                                    ),
                                   ],
                                 ),
                               ),

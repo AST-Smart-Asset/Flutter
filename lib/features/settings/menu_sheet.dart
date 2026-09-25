@@ -250,7 +250,7 @@ class _MenuSheetState extends State<MenuSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Badya University Enterprise Asset Management Support Desk', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5)),
+            Text('Badr University Enterprise Asset Management Support Desk', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5)),
             SizedBox(height: 10),
             Text('• IT Service Desk: support@bua.edu.eg'),
             SizedBox(height: 4),
